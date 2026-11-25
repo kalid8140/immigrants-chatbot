@@ -1,17 +1,28 @@
 import asyncio
 import logging
 import os
+import re
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message
 
-# =========================
-# CONFIGURATION
-# =========================
-
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+
+# Admin 1: ID duraan Render keessa jiru
+ADMIN_IDS = set()
+
+old_admin = os.getenv("ADMIN_ID", "").strip()
+if old_admin:
+    ADMIN_IDS.add(int(old_admin))
+
+# Admin 2, 3, 4: IDwwan haaraa
+extra_admins = os.getenv("ADMIN_IDS", "")
+
+for admin_id in extra_admins.split(","):
+    admin_id = admin_id.strip()
+    if admin_id:
+        ADMIN_IDS.add(int(admin_id))
 
 logging.basicConfig(level=logging.INFO)
 
@@ -21,18 +32,14 @@ dp = Dispatcher()
 users = set()
 
 
-# =========================
-# START COMMAND
-# =========================
-
 @dp.message(CommandStart())
 async def start(message: Message):
-
-    if message.from_user.id == ADMIN_ID:
+    if message.from_user.id in ADMIN_IDS:
         await message.answer(
             "👑 Welcome Admin!\n\n"
-            "You can reply to users directly from this Telegram account.\n"
-            "Use /users to see user statistics."
+            "You are an administrator of IMMIGRANTS CHAT.\n\n"
+            "Use /users to see user statistics.\n"
+            "Reply directly to a user's notification to respond."
         )
         return
 
@@ -42,56 +49,48 @@ async def start(message: Message):
         "🌍 Welcome to IMMIGRANTS CHAT!\n\n"
         "Afaan Oromoo | አማርኛ | English\n\n"
         "Send your message here.\n"
-        "Our Admin will reply to you soon. ❤️"
+        "Our Admin team will reply to you soon. ❤️"
     )
 
-
-# =========================
-# ADMIN USERS COMMAND
-# =========================
 
 @dp.message(Command("users"))
 async def show_users(message: Message):
-
-    if message.from_user.id != ADMIN_ID:
+    if message.from_user.id not in ADMIN_IDS:
         return
 
     await message.answer(
-        f"👥 Users since last restart: {len(users)}"
+        f"👥 Users since last restart: {len(users)}\n"
+        f"👑 Total Admins: {len(ADMIN_IDS)}"
     )
 
 
-# =========================
-# ADMIN REPLY SYSTEM
-# =========================
-
-@dp.message(F.from_user.id == ADMIN_ID)
+@dp.message(F.from_user.id.in_(ADMIN_IDS))
 async def admin_messages(message: Message):
 
     if not message.reply_to_message:
         await message.answer(
-            "👑 Admin Panel\n\n"
+            "👑 ADMIN PANEL\n\n"
             "To reply to a user:\n"
             "1. Find the user's notification.\n"
-            "2. Reply directly to that notification.\n"
-            "3. Send your message.\n\n"
-            "Use /users to see users."
+            "2. Reply directly to the notification.\n"
+            "3. Send your reply.\n\n"
+            "Use /users for statistics."
         )
         return
 
     original = message.reply_to_message.text or ""
 
-    if "User ID:" not in original:
+    match = re.search(r"User ID:\s*(\d+)", original)
+
+    if not match or "IMMIGRANTS_CHAT_REPLY" not in original:
         await message.answer(
-            "⚠️ Please Reply directly to the user's notification."
+            "⚠️ Please reply directly to the user's notification."
         )
         return
 
-    try:
-        user_id = int(
-            original.split("User ID:")[1].splitlines()[0].strip()
-        )
+    user_id = int(match.group(1))
 
+    try:
         await message.copy_to(chat_id=user_id)
 
         await message.answer(
@@ -106,57 +105,61 @@ async def admin_messages(message: Message):
         )
 
 
-# =========================
-# USER MESSAGES
-# =========================
-
-@dp.message(F.from_user.id != ADMIN_ID)
+@dp.message()
 async def receive_user_message(message: Message):
+
+    if message.from_user.id in ADMIN_IDS:
+        return
 
     user_id = message.from_user.id
     users.add(user_id)
 
-    try:
-        # Send notification containing the user ID.
-        await bot.send_message(
-            ADMIN_ID,
-            f"📩 NEW MESSAGE\n\n"
-            f"👤 Name: {message.from_user.full_name}\n"
-            f"Username: @{message.from_user.username or 'None'}\n"
-            f"User ID: {user_id}\n\n"
-            f"👇 Reply directly to THIS notification."
-        )
+    delivered = 0
 
-        # Send the original message separately.
-        await message.copy_to(chat_id=ADMIN_ID)
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(
+                admin_id,
+                "📩 NEW MESSAGE\n\n"
+                f"👤 Name: {message.from_user.full_name}\n"
+                f"Username: @{message.from_user.username or 'None'}\n"
+                f"IMMIGRANTS_CHAT_REPLY\n"
+                f"User ID: {user_id}\n\n"
+                "👇 Reply directly to THIS notification."
+            )
 
+            await message.copy_to(chat_id=admin_id)
+            delivered += 1
+
+        except Exception as error:
+            logging.exception(
+                "Could not send message to admin %s: %s",
+                admin_id,
+                error
+            )
+
+    if delivered > 0:
         await message.answer(
-            "✅ Your message has been sent to our Admin.\n\n"
+            "✅ Your message has been sent to our Admin team.\n"
             "Please wait for a reply. ❤️"
         )
-
-    except Exception as error:
-        logging.exception("Message delivery failed: %s", error)
-
+    else:
         await message.answer(
-            "⚠️ Sorry, your message could not be delivered. "
+            "⚠️ Our Admin team could not receive your message.\n"
             "Please try again later."
         )
 
-
-# =========================
-# START BOT
-# =========================
 
 async def main():
 
     if not BOT_TOKEN:
         raise ValueError("BOT_TOKEN is missing!")
 
-    if not ADMIN_ID:
-        raise ValueError("ADMIN_ID is missing!")
+    if not ADMIN_IDS:
+        raise ValueError("No ADMIN IDs configured!")
 
     logging.info("Immigrants Chat is starting...")
+    logging.info("Total Admins: %s", len(ADMIN_IDS))
 
     await dp.start_polling(bot)
 
